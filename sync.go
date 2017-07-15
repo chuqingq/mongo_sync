@@ -193,10 +193,16 @@ func (config *Config) writeOplog() error {
 		case oplogEntry := <-config.OplogChan:
 			config.OpsToApply = append(config.OpsToApply, oplogEntry)
 			if len(config.OpsToApply) == cap(config.OpsToApply) {
-				config.applyOps()
+				err := config.applyOps()
+				if err != nil {
+					return err
+				}
 			}
 		case <-time.After(1 * time.Second):
-			config.applyOps()
+			err := config.applyOps()
+			if err != nil {
+				return err
+			}
 		}
 	}
 }
@@ -208,8 +214,16 @@ func (config *Config) applyOps() error {
 
 	log.Printf("%v opCount: %v", time.Now(), len(config.OpsToApply))
 
+	last := config.OpsToApply[len(config.OpsToApply)-1]
+	config.Ts = uint64(last.Timestamp)
+	err := config.WriteFile()
+	if err != nil {
+		log.Printf("config.WriteFile error: %v", err)
+		return err
+	}
+
 	var applyOpsResponse ApplyOpsResponse
-	err := config.DstSess.Run(bson.M{"applyOps": config.OpsToApply}, &applyOpsResponse)
+	err = config.DstSess.Run(bson.M{"applyOps": config.OpsToApply}, &applyOpsResponse)
 	if err != nil {
 		return err
 	}
@@ -218,16 +232,7 @@ func (config *Config) applyOps() error {
 		return fmt.Errorf("server gave error applying ops: %v", applyOpsResponse.ErrMsg)
 	}
 
-	last := config.OpsToApply[len(config.OpsToApply)-1]
-	config.Ts = uint64(last.Timestamp)
-	err = config.WriteFile()
-	if err != nil {
-		log.Printf("config.WriteFile error: %v", err)
-		return err
-	}
-
 	config.OpsToApply = config.OpsToApply[:0:cap(config.OpsToApply)]
 
 	return nil
 }
-
